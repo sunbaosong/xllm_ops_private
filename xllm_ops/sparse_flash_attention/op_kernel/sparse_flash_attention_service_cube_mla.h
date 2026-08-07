@@ -383,6 +383,9 @@ __aicore__ inline void SFAMatmulService<SFAT>::CopyInMm1ARopeToL1(LocalTensor<KV
                                                                          const RunInfo &info, uint32_t mSeqIdx,
                                                                          uint32_t mSizeAct)
 {
+    if (constInfo.headDimRope == 0) {
+        return;
+    }
     auto srcGm = qRopeGm[info.tensorARopeOffset + mSeqIdx * constInfo.headDimRope];
     CopyGmToL1(l1Tensor, srcGm, mSizeAct, constInfo.headDimRope, constInfo.headDimRope);
 }
@@ -418,6 +421,9 @@ SFAMatmulService<SFAT>::CopyInMm1BRopeToL1(LocalTensor<KV_T> &bL1Tensor, const u
                                                        uint32_t copyTotalRowCntAlign, uint32_t copyStartRowCnt,
                                                        uint32_t nActCopyRowCount, uint32_t headSize)
 {
+    if (constInfo.headDimRope == 0) {
+        return;
+    }
     uint64_t dStride = constInfo.headDimRope;
     if constexpr (KV_LAYOUT_T == SFA_LAYOUT::BSND || KV_LAYOUT_T == SFA_LAYOUT::TND) {
         dStride = constInfo.headDimRope * constInfo.kvHeadNum;
@@ -635,13 +641,15 @@ __aicore__ inline void SFAMatmulService<SFAT>::ComputeMm1(const RunInfo &info, c
                                  kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kSize +
                                             nL1 * N_SPLIT_SIZE * constInfo.headDim],
                                  nd2nzPara);
-                        nd2nzPara.dValue = constInfo.headDimRope >> 1;
-                        nd2nzPara.srcDValue = constInfo.headDimRope;
-                        DataCopy(
-                            bL1Tensor[nL1SizeAlign * (constInfo.headDim >> 1)],
-                            kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kSize + N_WORKSPACE_SIZE * constInfo.headDim +
-                                       nL1 * N_SPLIT_SIZE * constInfo.headDimRope],
-                            nd2nzPara);
+                        if (constInfo.headDimRope > 0) {
+                            nd2nzPara.dValue = constInfo.headDimRope >> 1;
+                            nd2nzPara.srcDValue = constInfo.headDimRope;
+                            DataCopy(
+                                bL1Tensor[nL1SizeAlign * (constInfo.headDim >> 1)],
+                                kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kSize + N_WORKSPACE_SIZE * constInfo.headDim +
+                                           nL1 * N_SPLIT_SIZE * constInfo.headDimRope],
+                                nd2nzPara);
+                        }
                     } else {
                         LocalTensor<Q_T> kTmpTensor = bL1Tensor[(constInfo.headDimRope >> 1) * nL1SizeAlign];
                         Nd2NzParams nd2nzPara;
@@ -657,13 +665,15 @@ __aicore__ inline void SFAMatmulService<SFAT>::ComputeMm1(const RunInfo &info, c
                                  kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kSize + (constInfo.headDim >> 1) +
                                             nL1 * N_SPLIT_SIZE * constInfo.headDim],
                                  nd2nzPara);
-                        nd2nzPara.dValue = constInfo.headDimRope >> 1;
-                        nd2nzPara.srcDValue = constInfo.headDimRope;
-                        DataCopy(
-                            bL1Tensor,
-                            kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kSize + N_WORKSPACE_SIZE * constInfo.headDim +
-                                       (constInfo.headDimRope >> 1) + nL1 * N_SPLIT_SIZE * constInfo.headDimRope],
-                            nd2nzPara);
+                        if (constInfo.headDimRope > 0) {
+                            nd2nzPara.dValue = constInfo.headDimRope >> 1;
+                            nd2nzPara.srcDValue = constInfo.headDimRope;
+                            DataCopy(
+                                bL1Tensor,
+                                kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kSize + N_WORKSPACE_SIZE * constInfo.headDim +
+                                           (constInfo.headDimRope >> 1) + nL1 * N_SPLIT_SIZE * constInfo.headDimRope],
+                                nd2nzPara);
+                        }
                     }
                 } else {
                     while (copyFinishRowCnt < nL1Size) {
@@ -696,14 +706,18 @@ __aicore__ inline void SFAMatmulService<SFAT>::ComputeMm1(const RunInfo &info, c
                             if (kL1 == 0) {
                                 kTensor = bL1Tensor[copyFinishRowCnt * 16];
                                 DataCopyPA<KV_T, KV_LAYOUT_T>(kTensor, keyGm, blockTableGm, shape, startPos);
-                                kRopeTensor = bL1Tensor[(nL1SizeAlign * (BlockAlign<KV_T>(constInfo.headDim) >> 1)) +
-                                                        copyFinishRowCnt * 16];
-                                DataCopyPA<KV_T, KV_LAYOUT_T>(kRopeTensor, kRopeGm, blockTableGm, ropeShape,
-                                                              ropeStartPos);
+                                if (constInfo.headDimRope > 0) {
+                                    kRopeTensor = bL1Tensor[(nL1SizeAlign * (BlockAlign<KV_T>(constInfo.headDim) >> 1)) +
+                                                            copyFinishRowCnt * 16];
+                                    DataCopyPA<KV_T, KV_LAYOUT_T>(kRopeTensor, kRopeGm, blockTableGm, ropeShape,
+                                                                  ropeStartPos);
+                                }
                             } else {
-                                kRopeTensor = bL1Tensor[copyFinishRowCnt * 16];
-                                DataCopyPA<KV_T, KV_LAYOUT_T>(kRopeTensor, kRopeGm, blockTableGm, ropeShape,
-                                                              ropeStartPos);
+                                if (constInfo.headDimRope > 0) {
+                                    kRopeTensor = bL1Tensor[copyFinishRowCnt * 16];
+                                    DataCopyPA<KV_T, KV_LAYOUT_T>(kRopeTensor, kRopeGm, blockTableGm, ropeShape,
+                                                                  ropeStartPos);
+                                }
                                 LocalTensor<Q_T> kTmpTensor = bL1Tensor[32 * nL1SizeAlign + copyFinishRowCnt * 16];
                                 DataCopyPA<KV_T, KV_LAYOUT_T>(kTmpTensor, keyGm, blockTableGm, shape, startPos);
                             }
