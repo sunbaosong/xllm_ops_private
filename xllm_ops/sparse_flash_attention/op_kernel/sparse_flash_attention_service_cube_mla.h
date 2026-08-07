@@ -583,6 +583,11 @@ __aicore__ inline void SFAMatmulService<SFAT>::ComputeMm1(const RunInfo &info, c
     uint32_t kL1Size = (constInfo.headDim + constInfo.headDimRope) >> 1;
     uint32_t kL1Loops = kSize / kL1Size; // 2 : (headDim+headDimRope)/((headDim+headDimRope)>>1), mla专用 这里不考虑d泛化
 
+    // kvMergeGm_的per-loop buffer stride. 与vector写入/kernel分配/ComputeMm2读取的契约一致,
+    // 恒为headDim+ropeDim=576(vector_mla.h:901 `512*576`, kernel_mla.h:449 `512*576*4`, cube:955 `576`).
+    // 注意: 此处不能用kSize, 因为kSize在rope=0时为512(K轴tiling用), 而merged-KV GM布局固定576.
+    constexpr uint32_t kMergeGmStride = 576;
+
     // kL0Size为定长窗口(列stride恒为96); kL0Loops=ceil(kL1Size/96).
     // rope=64: 288/96=3 整除; rope=0: ceil(256/96)=3, 但尾块仅64有效列(见kL0循环内kL0SizeAct).
     uint32_t kL0Size = 96;
@@ -642,7 +647,7 @@ __aicore__ inline void SFAMatmulService<SFAT>::ComputeMm1(const RunInfo &info, c
                         nd2nzPara.srcNdMatrixStride = 0;
                         nd2nzPara.dstNzMatrixStride = 0;
                         DataCopy(bL1Tensor,
-                                 kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kSize +
+                                 kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kMergeGmStride +
                                             nL1 * N_SPLIT_SIZE * constInfo.headDim],
                                  nd2nzPara);
                         if (constInfo.headDimRope > 0) {
@@ -650,7 +655,7 @@ __aicore__ inline void SFAMatmulService<SFAT>::ComputeMm1(const RunInfo &info, c
                             nd2nzPara.srcDValue = constInfo.headDimRope;
                             DataCopy(
                                 bL1Tensor[nL1SizeAlign * (constInfo.headDim >> 1)],
-                                kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kSize + N_WORKSPACE_SIZE * constInfo.headDim +
+                                kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kMergeGmStride + N_WORKSPACE_SIZE * constInfo.headDim +
                                            nL1 * N_SPLIT_SIZE * constInfo.headDimRope],
                                 nd2nzPara);
                         }
@@ -666,7 +671,7 @@ __aicore__ inline void SFAMatmulService<SFAT>::ComputeMm1(const RunInfo &info, c
                         nd2nzPara.srcNdMatrixStride = 0;
                         nd2nzPara.dstNzMatrixStride = 0;
                         DataCopy(kTmpTensor,
-                                 kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kSize + (constInfo.headDim >> 1) +
+                                 kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kMergeGmStride + (constInfo.headDim >> 1) +
                                             nL1 * N_SPLIT_SIZE * constInfo.headDim],
                                  nd2nzPara);
                         if (constInfo.headDimRope > 0) {
@@ -674,7 +679,7 @@ __aicore__ inline void SFAMatmulService<SFAT>::ComputeMm1(const RunInfo &info, c
                             nd2nzPara.srcDValue = constInfo.headDimRope;
                             DataCopy(
                                 bL1Tensor,
-                                kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kSize + N_WORKSPACE_SIZE * constInfo.headDim +
+                                kvMergeGm_[info.loop % 4 * N_WORKSPACE_SIZE * kMergeGmStride + N_WORKSPACE_SIZE * constInfo.headDim +
                                            (constInfo.headDimRope >> 1) + nL1 * N_SPLIT_SIZE * constInfo.headDimRope],
                                 nd2nzPara);
                         }
