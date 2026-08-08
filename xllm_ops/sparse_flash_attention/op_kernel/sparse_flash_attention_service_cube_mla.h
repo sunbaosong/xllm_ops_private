@@ -588,9 +588,12 @@ __aicore__ inline void SFAMatmulService<SFAT>::ComputeMm1(const RunInfo &info, c
     // 注意: 此处不能用kSize, 因为kSize在rope=0时为512(K轴tiling用), 而merged-KV GM布局固定576.
     constexpr uint32_t kMergeGmStride = 576;
 
-    // kL0Size为定长窗口(列stride恒为96); kL0Loops=ceil(kL1Size/96).
-    // rope=64: 288/96=3 整除; rope=0: ceil(256/96)=3, 但尾块仅64有效列(见kL0循环内kL0SizeAct).
-    uint32_t kL0Size = 96;
+    // kL0Size为定长窗口(列stride). kL0Loops=ceil(kL1Size/kL0Size).
+    // rope=0: kL1Size=256, kL0Size=128 → 256/128=2 整除, 无尾块(原96: 256%96=64→sub-96尾块kL0SizeAct=64,
+    //   该尾块的LoadData3D/2D(kSize=64)+96列L1 stride触发MTE DMA越界, errorCode 546/507057崩溃).
+    // rope=64: kL1Size=288, kL0Size=96(不变) → 288/96=3 整除, 无尾块, 与原硬编码逐字节等价.
+    // kL0Size=128的L0容量已由ComputeMm2(同buf, 同kL0Size=128, rope=0/64均通过)证明安全.
+    uint32_t kL0Size = (constInfo.headDimRope == 0) ? 128 : 96;
     uint32_t kL0Loops = (kL1Size + kL0Size - 1) / kL0Size; // ceil(kL1Size / kL0Size)
 
     LocalTensor<KV_T> bL1Tensor;
