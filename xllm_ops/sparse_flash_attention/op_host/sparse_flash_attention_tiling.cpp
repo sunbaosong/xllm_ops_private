@@ -345,6 +345,7 @@ void SFAMlaTiling::FillTilingBaseParamsMla()
     tilingData_.baseParams.set_sparseMode(sfaInfo_->sparseMode);
     tilingData_.baseParams.set_sparseBlockSize(sfaInfo_->sparseBlockSize);
     tilingData_.baseParams.set_sparseBlockCount(sfaInfo_->sparseBlockCount);
+    tilingData_.baseParams.set_ropeHeadDim(sfaInfo_->ropeHeadDim);
 }
 
 // for flash decode
@@ -731,6 +732,9 @@ ge::graphStatus SFATilingCheck::CheckRopeExistence()
     OPS_ERR_IF((opParamInfo_.queryRope.tensor == nullptr && opParamInfo_.keyRope.tensor != nullptr),
         OPS_LOG_E(opName_, "QueryRope is null, but keyRope exists, they should be both null or exist."),
         return ge::GRAPH_FAILED);
+    if (opParamInfo_.queryRope.tensor == nullptr && opParamInfo_.keyRope.tensor == nullptr) {
+        return ge::GRAPH_SUCCESS;
+    }
     OPS_ERR_IF(opParamInfo_.keyRope.desc == nullptr || opParamInfo_.queryRope.desc == nullptr,
         OPS_LOG_E(opName_, "In Mla situation, desc of keyRope and queryRope should not be null"),
         return ge::GRAPH_FAILED);
@@ -867,8 +871,12 @@ void SFATilingCheck::SetSFAShapeCompare()
     keyShapeCmp_ = opParamInfo_.key.shape->GetStorageShape();
     valueShapeCmp_ = opParamInfo_.value.shape->GetStorageShape();
     attenOutShapeCmp_ = opParamInfo_.attenOut.shape->GetStorageShape();
-    queryRopeShapeCmp_ = opParamInfo_.queryRope.tensor->GetStorageShape();
-    keyRopeShapeCmp_ = opParamInfo_.keyRope.tensor->GetStorageShape();
+    if (opParamInfo_.queryRope.tensor != nullptr) {
+        queryRopeShapeCmp_ = opParamInfo_.queryRope.tensor->GetStorageShape();
+    }
+    if (opParamInfo_.keyRope.tensor != nullptr) {
+        keyRopeShapeCmp_ = opParamInfo_.keyRope.tensor->GetStorageShape();
+    }
 }
 
 ge::graphStatus SFATilingCheck::CheckBlockTable() const
@@ -950,6 +958,9 @@ ge::graphStatus SFATilingCheck::CheckAttenOut()
 
 ge::graphStatus SFATilingCheck::CheckQRope()
 {
+    if (opParamInfo_.queryRope.tensor == nullptr) {
+        return ge::GRAPH_SUCCESS;
+    }
     if (ge::GRAPH_SUCCESS != CheckDTypeConsistency(opParamInfo_.queryRope.desc->GetDataType(),
         inputQType_, QUERY_ROPE_NAME) ||
         ge::GRAPH_SUCCESS != CheckQRopeShape()) {
@@ -1046,6 +1057,13 @@ ge::graphStatus SFATilingCheck::CheckVAndKRopeShape()
 
 ge::graphStatus SFATilingCheck::CheckVAndKRope()
 {
+    if (opParamInfo_.keyRope.tensor == nullptr) {
+        if (ge::GRAPH_SUCCESS != CheckDTypeConsistency(opParamInfo_.value.desc->GetDataType(),
+            inputKvType_, VALUE_NAME)) {
+            return ge::GRAPH_FAILED;
+        }
+        return ge::GRAPH_SUCCESS;
+    }
     if (ge::GRAPH_SUCCESS != CheckDTypeConsistency(opParamInfo_.value.desc->GetDataType(),
         inputKvType_, VALUE_NAME) ||
         ge::GRAPH_SUCCESS != CheckDTypeConsistency(opParamInfo_.keyRope.desc->GetDataType(),
@@ -1198,8 +1216,8 @@ ge::graphStatus SFATilingCheck::CheckFeatureMlaNoQuantShape() const
         OPS_LOG_E(opName_, "qk_head_dim[%u] should be equal to v_head_dim[%u]", qkHeadDim_, vHeadDim_),
         return ge::GRAPH_FAILED);
 
-    OPS_ERR_IF(ropeHeadDim_ != 64,
-        OPS_LOG_E(opName_, "rope_head_dim should be 64, but got %u", ropeHeadDim_),
+    OPS_ERR_IF(ropeHeadDim_ != 0 && ropeHeadDim_ != 64,
+        OPS_LOG_E(opName_, "rope_head_dim should be 0 or 64, but got %u", ropeHeadDim_),
         return ge::GRAPH_FAILED);
     return ge::GRAPH_SUCCESS;
 }
@@ -1372,10 +1390,10 @@ ge::graphStatus SFAInfoParser::CheckRequiredInOutExistence() const
                return ge::GRAPH_FAILED);
     OPS_ERR_IF(opParamInfo_.attenOut.desc == nullptr, OPS_LOG_E(opName_, "Desc of tensor output is nullptr"),
                return ge::GRAPH_FAILED);
-    OPS_ERR_IF(opParamInfo_.queryRope.tensor == nullptr, OPS_LOG_E(opName_, "Shape of queryRope is nullptr"),
-               return ge::GRAPH_FAILED);
-    OPS_ERR_IF(opParamInfo_.queryRope.desc == nullptr, OPS_LOG_E(opName_, "Desc of queryRope is nullptr"),
-               return ge::GRAPH_FAILED);
+    if (opParamInfo_.queryRope.tensor != nullptr) {
+        OPS_ERR_IF(opParamInfo_.queryRope.desc == nullptr, OPS_LOG_E(opName_, "Desc of queryRope is nullptr"),
+                   return ge::GRAPH_FAILED);
+    }
 
     return ge::GRAPH_SUCCESS;
 }
@@ -1697,6 +1715,10 @@ ge::graphStatus SFAInfoParser::GetValueHeadDim()
 
 ge::graphStatus SFAInfoParser::GetRopeHeadDim()
 {
+    if (opParamInfo_.queryRope.tensor == nullptr) {
+        ropeHeadDim_ = 0;
+        return ge::GRAPH_SUCCESS;
+    }
     ropeHeadDim_ = GetAxisNum(queryRopeShape_, SFAAxis::D, qLayout_);
     return ge::GRAPH_SUCCESS;
 }
@@ -1746,7 +1768,9 @@ void SFAInfoParser::SetSFAShape()
     keyShape_ = opParamInfo_.key.shape->GetStorageShape();
     valueShape_ = opParamInfo_.value.shape->GetStorageShape();
     sparseIndicesShape_ = opParamInfo_.sparseIndices.shape->GetStorageShape();
-    queryRopeShape_ = opParamInfo_.queryRope.tensor->GetStorageShape();
+    if (opParamInfo_.queryRope.tensor != nullptr) {
+        queryRopeShape_ = opParamInfo_.queryRope.tensor->GetStorageShape();
+    }
 }
 
 ge::graphStatus SFAInfoParser::GetGSize()
